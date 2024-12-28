@@ -1,0 +1,33 @@
+{
+    "version": 8,
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default Config",
+            "description": "Default build using Ninja generator",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang.exe",
+                "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang++.exe"
+            }
+        },
+        {
+            "name": "cl-msvc",
+            "displayName": "Clang 17.0.3 (MSVC CLI)",
+            "description": "使用编译器clang-cl.exe",
+            "generator": "Visual Studio 17 2022",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_CONFIGURATION_TYPES": "Debug", 
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "CMAKE_C_COMPILER": "E:/Visual Studio/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+                "CMAKE_CXX_COMPILER": "E:/Visual Studio/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe"
+            }
+        }
+    ]
+}
+
