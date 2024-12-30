@@ -21,12 +21,8 @@ target_link_libraries(learn_gl PRIVATE glm::glm-header-only)
 # message("${CMAKE_CXX_COMPILER_ID}")
 add_custom_target(copy_resources ALL 
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/app/shaders
-    $<TARGET_FILE_DIR:learn_gl>/shaders
-
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/app/textures
-    $<TARGET_FILE_DIR:learn_gl>/textures
+    ${CMAKE_SOURCE_DIR}/app/resources
+    $<TARGET_FILE_DIR:learn_gl>/resources
     COMMENT "Copying resources"
 )
 

@@ -1,10 +1,21 @@
+#include <algorithm>
+#include <assimp/material.h>
+#include <assimp/types.h>
 #include <format>
 #include <glm/ext/matrix_float4x4.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/ext/vector_float3.hpp>
 #include <iterator>
 #include <random>
+#include <ranges>
 #include <stdexcept>
+#include <string>
 #include <vector>
+
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
@@ -14,6 +25,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <camera.hpp>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -25,6 +37,9 @@
 #define GLFW_NATIVE_INCLUDE_NONE
 #include <GLFW/glfw3native.h>
 #endif
+
+namespace fs = std::filesystem;
+
 void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
   glViewport(0, 0, width, height);
 }
@@ -50,6 +65,16 @@ const auto cameraFront = glm::vec3(.0f, .0f, -1.0f);
 const auto cameraUp = glm::vec3(.0f, 1.0f, .0f);
 static cg::Camera camera{cameraPos, cameraFront, cameraUp};
 
+GLuint LoadTexture(const char *path, bool = false);
+GLuint TextureFromFile(const std::string &path, const std::string &dir) {
+  if (!fs::exists(dir)) {
+    throw std::runtime_error("dir not exists");
+  }
+  fs::path parent{dir};
+  fs::path file_path = parent / path;
+  GLuint textureID = LoadTexture(file_path.string().c_str());
+  return textureID;
+}
 struct Vertex {
   glm::vec3 Position;
   glm::vec3 Normal;
@@ -60,6 +85,7 @@ struct Vertex {
 struct Texture {
   GLuint id;
   std::string type;
+  aiString path;
 };
 
 class Mesh {
@@ -81,7 +107,157 @@ private:
   GLuint VAO, VBO, EBO;
   void setupMesh();
 };
-void Mesh::setupMesh() {}
+void Mesh::setupMesh() {
+  glGenVertexArrays(1, &VAO);
+  glGenBuffers(1, &VBO);
+  glGenBuffers(1, &EBO);
+  glBindVertexArray(VAO);
+  glBindBuffer(GL_ARRAY_BUFFER, VBO);
+  glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), &vertices[0],
+               GL_STATIC_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int),
+               &indices[0], GL_STATIC_DRAW);
+  // 顶点位置
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void *)0);
+  // 顶点法线
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)offsetof(Vertex, Normal));
+  // 顶点纹理坐标
+  glEnableVertexAttribArray(2);
+  glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                        (void *)offsetof(Vertex, TexCoords));
+  glBindVertexArray(0);
+}
+void Mesh::Draw(cg::Shader shader) {
+  shader.use();
+  unsigned int diffuseNr = 1;
+  unsigned int specularNr = 1;
+  for (std::size_t i{}; i < textures.size(); i++) {
+    glActiveTexture(GL_TEXTURE0 + i);
+    std::string name = textures[i].type;
+    std::string number{};
+    if (name == "texture_diffuse") {
+      number = std::to_string(diffuseNr++);
+    } else if (name == "texture_specular") {
+      number = std::to_string(specularNr++);
+    }
+    shader.setInt(("material." + name + number).c_str(), i);
+
+    glBindTexture(GL_TEXTURE_2D, textures[i].id);
+  }
+
+  glActiveTexture(GL_TEXTURE0);
+  glBindVertexArray(VAO);
+  glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+  glBindVertexArray(0);
+}
+class Model {
+public:
+  Model(const std::string &path) { loadModel(path); }
+  void Draw(cg::Shader);
+
+private:
+  std::vector<Texture> textures_loaded;
+  std::vector<Mesh> meshes;
+  std::string directory;
+  void loadModel(const std::string &path);
+  void processNode(aiNode *node, const aiScene *scene);
+  Mesh processMesh(aiMesh *mesh, const aiScene *scene);
+  std::vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type,
+                                            std::string typenName);
+};
+
+void Model::Draw(cg::Shader shader) {
+  for (std::size_t i{}; i < meshes.size(); i++) {
+    meshes[i].Draw(shader);
+  }
+}
+
+void Model::loadModel(const std::string &path) {
+  Assimp::Importer importer;
+  const auto scene =
+      importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+  if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE ||
+      !scene->mRootNode) {
+    std::cerr << "ERROR::ASSIMP::" << importer.GetErrorString() << std::endl;
+    return;
+  }
+  directory = fs::path(path).parent_path().string();
+  processNode(scene->mRootNode, scene);
+}
+void Model::processNode(aiNode *node, const aiScene *scene) {
+  for (std::size_t i{}; i < node->mNumMeshes; i++) {
+    auto mesh =
+        scene->mMeshes
+            [node->mMeshes[i]]; // node中存储着的是索引,通过这个索引获取mesh
+    meshes.push_back(processMesh(mesh, scene));
+  }
+  for (std::size_t i{}; i < node->mNumChildren; i++) {
+    processNode(node->mChildren[i], scene);
+  }
+}
+Mesh Model::processMesh(aiMesh *mesh, const aiScene *scene) {
+  std::vector<Vertex> vertices;
+  std::vector<unsigned int> indices;
+  std::vector<Texture> textures;
+  for (unsigned int i{}; i < mesh->mNumVertices; i++) {
+    Vertex v{
+        .Position{mesh->mVertices[i].x, mesh->mVertices[i].y,
+                  mesh->mVertices[i].z},
+        .Normal{mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z},
+        .TexCoords{.0f, .0f}};
+    if (mesh->mTextureCoords[0]) {
+      glm::vec2 vec;
+      vec.x = mesh->mTextureCoords[0][i].x;
+      vec.y = mesh->mTextureCoords[0][i].y;
+      v.TexCoords = vec;
+    }
+    vertices.push_back(v);
+  }
+  for (unsigned int i{}; i < mesh->mNumFaces; i++) {
+    auto face = mesh->mFaces[i];
+    // for(unsigned int j{};j<face.mNumIndices;j++){
+    //   indices.push_back(face.mIndices[j]);
+    // }
+    indices.insert(indices.end(), face.mIndices,
+                   face.mIndices + face.mNumIndices);
+  }
+  if (mesh->mMaterialIndex > 0) {
+    auto material = scene->mMaterials[mesh->mMaterialIndex];
+    auto diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE,
+                                            "texture_diffuse");
+    auto specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR,
+                                             "texture_specular");
+    textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
+    textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
+  }
+  Mesh my_mesh{vertices, indices, textures};
+  return my_mesh;
+}
+std::vector<Texture> Model::loadMaterialTextures(aiMaterial *mat,
+                                                 aiTextureType type,
+                                                 std::string typeName) {
+  std::vector<Texture> textures;
+  for (unsigned int i{}; i < mat->GetTextureCount(type); i++) {
+    aiString texturePath;
+    mat->GetTexture(type, i, &texturePath);
+    auto it = std::ranges::find(textures_loaded, texturePath, &Texture::path);
+    if (it == textures_loaded.end()) {
+      Texture texture;
+      texture.id = TextureFromFile(texturePath.C_Str(), directory);
+      texture.type = typeName;
+      texture.path = texturePath;
+      textures.push_back(texture);
+      textures_loaded.push_back(texture);
+    } else {
+      textures.push_back(*it);
+    }
+  }
+  return textures;
+}
 
 void processInput(GLFWwindow *window) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
@@ -103,6 +279,7 @@ void processInput(GLFWwindow *window) {
     camera.MoveDown();
   }
 }
+
 void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
   if (fov >= 1.0f && fov <= 45.0f) {
     fov -= yoffset;
@@ -127,7 +304,8 @@ void cursor_position_callback(GLFWwindow *window, double xpos, double ypos) {
   lastX = xpos;
   lastY = ypos;
 }
-GLuint LoadTexture(const char *path) {
+
+GLuint LoadTexture(const char *path, bool clip) {
   // 生成纹理
   GLuint texture;
   glGenTextures(1, &texture);
@@ -152,9 +330,13 @@ GLuint LoadTexture(const char *path) {
     glTexImage2D(GL_TEXTURE_2D, 0, format, img_width, img_height, 0, format,
                  GL_UNSIGNED_BYTE, data);
     glGenerateMipmap(GL_TEXTURE_2D);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    if (clip) {
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                     GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -202,10 +384,25 @@ int main() {
     glfwTerminate();
     return -1;
   }
-  glEnable(GL_DEPTH_TEST);
-  auto texture = LoadTexture("./textures/container2.png");
-  auto texture_sepc = LoadTexture("./textures/container2_specular.png");
-  auto texture_emission = LoadTexture("./textures/matrix.jpg");
+  glEnable(GL_DEPTH_TEST); // 启用深度和模板测试
+  glDepthFunc(GL_LESS);
+  glEnable(GL_STENCIL_TEST);
+  glEnable(GL_BLEND);
+  glEnable(GL_CULL_FACE);
+  glCullFace(GL_BACK);
+  // glFrontFace(GL_CCW);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glStencilFunc(GL_NOTEQUAL, 1, 0xff);       // 设置模板测试函数
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // 设置模板测试操作
+  // glStencilMask(0xff);                       // 启用模板写入
+
+  auto texture = LoadTexture("./resources/textures/container2.png");
+  auto texture_sepc =
+      LoadTexture("./resources/textures/container2_specular.png");
+  auto texture_emission = LoadTexture("./resources/textures/matrix.jpg");
+  auto grass_texture = LoadTexture("./resources/textures/grass.png", true);
+  auto window_texture =
+      LoadTexture("./resources/textures/blending_transparent_window.png", true);
   // 着色器编写
   // auto vertexShaderSource = R"(
   //   #version 400 core
@@ -222,15 +419,21 @@ int main() {
   // glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
   // glCompileShader(vertexShader);
 
-  auto vertexShaderFile = "./shaders/vertexShader.vert";
+  auto vertexShaderFile = "./resources/shaders/vertexShader.vert";
   // auto fragmentShaderFile = "./shaders/fragmentShader.frag";
-  auto fragmentShaderFile = "./shaders/multi_lights.frag";
+  auto fragmentShaderFile = "./resources/shaders/multi_lights.frag";
   cg::Shader shaderProgram{vertexShaderFile, fragmentShaderFile};
 
-  auto lightVertexShaderFile = "./shaders/lightShader.vert";
-  auto lightFragmentShaderFile = "./shaders/lightColor.frag";
+  auto lightVertexShaderFile = "./resources/shaders/lightShader.vert";
+  auto lightFragmentShaderFile = "./resources/shaders/lightColor.frag";
   cg::Shader lightShaderProgram{lightVertexShaderFile, lightFragmentShaderFile};
+  cg::Shader largeShaderProgram{"./resources/shaders/simpleVertex.vert",
 
+                                "./resources/shaders/shaderSingleColor.frag"};
+  cg::Shader grassShaderProgram{"./resources/shaders/vertexShader.vert",
+                                "./resources/shaders/grassShader.frag"};
+  cg::Shader windowShaderProgram{"./resources/shaders/vertexShader.vert",
+                                 "./resources/shaders/windowShader.frag"};
   // auto fragmentShaderSource = R"(
   //   #version 400 core
   //   out vec4 FragColor;
@@ -250,6 +453,7 @@ int main() {
 
   // glDeleteShader(vertexShader);
   // glDeleteShader(fragmentShader);
+  Model loaded_model{"./resources/models/nanosuit/nanosuit.obj"};
 
   GLuint VAO, VBO, EBO;
   GLuint lightVAO, lightVBO;
@@ -305,6 +509,62 @@ int main() {
   glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float),
                         (void *)(6 * sizeof(float)));
   glEnableVertexAttribArray(2);
+  float cubeVertices[] = {
+      // Back face
+      -0.5f, -0.5f, -0.5f, 0.0f, 0.0f, // Bottom-left
+      0.5f, 0.5f, -0.5f, 1.0f, 1.0f,   // top-right
+      0.5f, -0.5f, -0.5f, 1.0f, 0.0f,  // bottom-right
+      0.5f, 0.5f, -0.5f, 1.0f, 1.0f,   // top-right
+      -0.5f, -0.5f, -0.5f, 0.0f, 0.0f, // bottom-left
+      -0.5f, 0.5f, -0.5f, 0.0f, 1.0f,  // top-left
+      // Front face
+      -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, // bottom-left
+      0.5f, -0.5f, 0.5f, 1.0f, 0.0f,  // bottom-right
+      0.5f, 0.5f, 0.5f, 1.0f, 1.0f,   // top-right
+      0.5f, 0.5f, 0.5f, 1.0f, 1.0f,   // top-right
+      -0.5f, 0.5f, 0.5f, 0.0f, 1.0f,  // top-left
+      -0.5f, -0.5f, 0.5f, 0.0f, 0.0f, // bottom-left
+      // Left face
+      -0.5f, 0.5f, 0.5f, 1.0f, 0.0f,   // top-right
+      -0.5f, 0.5f, -0.5f, 1.0f, 1.0f,  // top-left
+      -0.5f, -0.5f, -0.5f, 0.0f, 1.0f, // bottom-left
+      -0.5f, -0.5f, -0.5f, 0.0f, 1.0f, // bottom-left
+      -0.5f, -0.5f, 0.5f, 0.0f, 0.0f,  // bottom-right
+      -0.5f, 0.5f, 0.5f, 1.0f, 0.0f,   // top-right
+                                       // Right face
+      0.5f, 0.5f, 0.5f, 1.0f, 0.0f,    // top-left
+      0.5f, -0.5f, -0.5f, 0.0f, 1.0f,  // bottom-right
+      0.5f, 0.5f, -0.5f, 1.0f, 1.0f,   // top-right
+      0.5f, -0.5f, -0.5f, 0.0f, 1.0f,  // bottom-right
+      0.5f, 0.5f, 0.5f, 1.0f, 0.0f,    // top-left
+      0.5f, -0.5f, 0.5f, 0.0f, 0.0f,   // bottom-left
+      // Bottom face
+      -0.5f, -0.5f, -0.5f, 0.0f, 1.0f, // top-right
+      0.5f, -0.5f, -0.5f, 1.0f, 1.0f,  // top-left
+      0.5f, -0.5f, 0.5f, 1.0f, 0.0f,   // bottom-left
+      0.5f, -0.5f, 0.5f, 1.0f, 0.0f,   // bottom-left
+      -0.5f, -0.5f, 0.5f, 0.0f, 0.0f,  // bottom-right
+      -0.5f, -0.5f, -0.5f, 0.0f, 1.0f, // top-right
+      // Top face
+      -0.5f, 0.5f, -0.5f, 0.0f, 1.0f, // top-left
+      0.5f, 0.5f, 0.5f, 1.0f, 0.0f,   // bottom-right
+      0.5f, 0.5f, -0.5f, 1.0f, 1.0f,  // top-right
+      0.5f, 0.5f, 0.5f, 1.0f, 0.0f,   // bottom-right
+      -0.5f, 0.5f, -0.5f, 0.0f, 1.0f, // top-left
+      -0.5f, 0.5f, 0.5f, 0.0f, 0.0f   // bottom-left
+  };
+  GLuint cubeVAO, cubeVBO;
+  glGenVertexArrays(1, &cubeVAO);
+  glGenBuffers(1, &cubeVBO);
+  glBindVertexArray(cubeVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(cubeVertices), cubeVertices,
+               GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                        (void *)(3 * sizeof(float)));
 
   float lightVertices[] = {
       -0.5f, -0.5f, -0.5f, 0.5f,  -0.5f, -0.5f, 0.5f,  0.5f,  -0.5f, 0.5f,
@@ -338,7 +598,9 @@ int main() {
 
   // 解绑buffer
   // glBindBuffer(GL_ARRAY_BUFFER, 0);
-
+  std::vector<glm::vec3> windowPositions{};
+  windowPositions.push_back(glm::vec3(3.5f, 0.0f, 10.48f));
+  windowPositions.push_back(glm::vec3(1.5f, 0.0f, 8.51f));
   // glBindVertexArray(0);
   shaderProgram.use();
   //   渲染loop
@@ -379,6 +641,7 @@ int main() {
       glm::vec3(-4.0f, 2.0f, -12.0f), glm::vec3(0.0f, 0.0f, -3.0f)};
 
   while (!glfwWindowShouldClose(window)) {
+
     currentFrame = glfwGetTime();
     deltaTime = currentFrame - lastFrame;
     lastFrame = currentFrame;
@@ -389,7 +652,8 @@ int main() {
     // "outColor"); 设置背景颜色
     processInput(window);
     glClearColor(.0f, .0f, .0f, .0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
     float camX = std::sin(glfwGetTime()) * radius;
     float camZ = std::cos(glfwGetTime()) * radius;
 
@@ -402,6 +666,7 @@ int main() {
 
     auto model{glm::mat4(1.0f)};
     auto trans = projection * view * model;
+
     lightShaderProgram.use();
     glBindVertexArray(lightVAO);
     // model = glm::rotate(glm::translate(model, glm::vec3(.2f, .3f, 1.3f)),
@@ -411,13 +676,13 @@ int main() {
     //     glm::rotate(model, glm::radians(randomAngle), glm::vec3(.0f, 1.f,
     //     .0f)), glm::vec3(1.2f, 1.0f, 2.0f));
 
+    glStencilMask(0x00);
     for (std::size_t i{}; i < std::size(pointLightPositions); i++) {
       model = glm::translate(model, pointLightPositions[i]);
       trans = projection * view * model;
       lightShaderProgram.setMat4("trans", trans);
       glDrawArrays(GL_TRIANGLES, 0, 36);
     }
-
     // 画图
     shaderProgram.use();
     glBindVertexArray(VAO);
@@ -426,9 +691,9 @@ int main() {
 
     // 定向光
     shaderProgram.setVec3("dirLight.direction", -0.2f, -1.0f, -0.3f);
-    shaderProgram.setVec3("dirLight.ambient", 0.2f, 1.0f, 0.3f);
-    shaderProgram.setVec3("dirLight.diffuse", 0.2f, 1.0f, 0.3f);
-    shaderProgram.setVec3("dirLight.specular", 0.2f, 1.0f, 0.3f);
+    shaderProgram.setVec3("dirLight.ambient", 0.05f, .05f, 0.05f);
+    shaderProgram.setVec3("dirLight.diffuse", 0.4f, .4f, 0.4f);
+    shaderProgram.setVec3("dirLight.specular", 0.5f, .5f, 0.5f);
 
     // 点光源
     for (std::size_t i{}; i < std::size(pointLightPositions); i++) {
@@ -468,7 +733,11 @@ int main() {
     // shaderProgram.setVec3("material.ambient", 1.0f, .5f, .3f);
     // shaderProgram.setVec3("material.diffuse", 1.0f, .5f, .31f);
 
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
     shaderProgram.setInt("material.diffuse", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, texture_sepc);
     shaderProgram.setInt("material.specular", 1);
     shaderProgram.setFloat("material.shininess", 64.0f);
     auto coord_trans = glm::vec2(.0f, 1.0f + std::sin(glfwGetTime()) / 2.0f);
@@ -482,30 +751,112 @@ int main() {
     shaderProgram.setMat4("projection", projection);
 
     // bind textures on corresponding texture units
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, texture_sepc);
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, texture_emission);
+    // glActiveTexture(GL_TEXTURE1);
+    // glActiveTexture(GL_TEXTURE2);
+    // glBindTexture(GL_TEXTURE_2D, texture_emission);
 
+    glStencilMask(0x00);
+    // loaded_model.Draw(shaderProgram);
     // shaderProgram.setFloat("offset", x_offset, .0f, .0f);
     // shaderProgram.setFloat("offsetColor", r_offset, .2f, .0f);
     // shaderProgram.setFloat("ourColor", 0.4f, 0.3f, 0.2f);
     // glUseProgram(shaderProgram);
     // glUniform4f(vertexColorLocation, 0.0f, greenValue, 0.0f, 1.0f);
+    // glBindVertexArray(VAO);
+    glStencilFunc(GL_ALWAYS, 1, 0xff);
+    glStencilMask(0xff);
     glDrawArrays(GL_TRIANGLES, 0, 36);
+    loaded_model.Draw(shaderProgram);
+    // glBindVertexArray(cubeVAO);
+    // for (std::size_t i{}; i < 3; i++) {
+    //   glm::mat4 model{1.0f};
+    //   model = glm::rotate(glm::translate(model, cubePositions[i]),
+    //                       glm::radians(randomAngle), glm::vec3(1.0f, 0.3f, 0.5f));
 
-    for (std::size_t i{}; i < 10; i++) {
+    //   shaderProgram.setMat4("model", model);
+    //   // glDrawArrays(GL_TRIANGLES, 0, 3);
+    //   // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    //   glActiveTexture(GL_TEXTURE0);
+    //   glBindTexture(GL_TEXTURE_2D, texture);
+    //   glActiveTexture(GL_TEXTURE1);
+    //   glBindTexture(GL_TEXTURE_2D, texture_sepc);
+    //   glDrawArrays(GL_TRIANGLES, 0, 36);
+    // }
+    glBindVertexArray(VAO);
+    for (std::size_t i{}; i < sizeof(cubePositions) / sizeof(glm::vec3); i++) {
       glm::mat4 model{1.0f};
       model = glm::rotate(glm::translate(model, cubePositions[i]),
-                          glm::radians(angle), glm::vec3(1.0f, 0.3f, 0.5f));
+                          glm::radians(0.0f), glm::vec3(1.0f, 0.3f, 0.5f));
 
       shaderProgram.setMat4("model", model);
       // glDrawArrays(GL_TRIANGLES, 0, 3);
       // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, texture);
+      glActiveTexture(GL_TEXTURE1);
+      glBindTexture(GL_TEXTURE_2D, texture_sepc);
       glDrawArrays(GL_TRIANGLES, 0, 36);
+      grassShaderProgram.use();
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, grass_texture);
+      grassShaderProgram.setInt("texture1", 0);
+      grassShaderProgram.setMat4("view", view);
+      grassShaderProgram.setMat4("projection", projection);
+      grassShaderProgram.setVec3("viewPos", camera.cameraPos);
+      model = glm::translate(model, glm::vec3(0.0f, 0.f, -0.01f));
+      grassShaderProgram.setMat4("model", model);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+      shaderProgram.use();
     }
+    grassShaderProgram.use();
+    glBindVertexArray(VAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, grass_texture);
+    grassShaderProgram.setInt("texture1", 0);
+    grassShaderProgram.setMat4("view", view);
+    grassShaderProgram.setMat4("projection", projection);
+    float radius = 10.f;
+    int grass_count{40};
+    for (int i : std::ranges::iota_view(0, grass_count)) {
+      model = glm::mat4(1.0f);
+      float theta = glm::radians(360.0f / grass_count * i);
+      auto location =
+          glm::vec3(radius * std::cos(theta), 0.0f, radius * std::sin(theta));
+      model = glm::translate(model, location);
+      grassShaderProgram.setMat4("model", model);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    model = glm::mat4(1.0f);
+    largeShaderProgram.use();
+    glBindVertexArray(VAO);
+    model = glm::scale(model, glm::vec3(1.1f));
+    largeShaderProgram.setMat4("model", model);
+    largeShaderProgram.setMat4("view", view);
+    largeShaderProgram.setMat4("projection", projection);
+    glStencilFunc(GL_NOTEQUAL, 1, 0xff);
+    glStencilMask(0x00);
+    // glDisable(GL_DEPTH_TEST);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    // 绘制窗口
+    windowShaderProgram.use();
+    glBindVertexArray(VAO);
+    windowShaderProgram.setMat4("view", view);
+    windowShaderProgram.setMat4("projection", projection);
+    windowShaderProgram.setInt("texture1", 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, window_texture);
+    for (std::size_t i{}; i < std::size(windowPositions); i++) {
+      model = glm::translate(model, windowPositions[i]);
+      windowShaderProgram.setMat4("model", model);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glEnable(GL_DEPTH_TEST);
+    glStencilFunc(GL_ALWAYS, 0, 0xff);
+    glStencilMask(0xff);
+
     glfwPollEvents();
     glfwSwapBuffers(window);
   }
