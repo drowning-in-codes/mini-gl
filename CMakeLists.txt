@@ -18,6 +18,7 @@ target_link_libraries(learn_gl PRIVATE glfw)
 target_link_libraries(learn_gl PRIVATE OpenGL::GL)
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(learn_gl PRIVATE glm::glm-header-only)
+add_subdirectory(examples)
 # message("${CMAKE_CXX_COMPILER_ID}")
 add_custom_target(copy_resources ALL 
     COMMAND ${CMAKE_COMMAND} -E copy_directory

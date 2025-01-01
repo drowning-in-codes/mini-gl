@@ -388,7 +388,7 @@ int main() {
   glDepthFunc(GL_LESS);
   glEnable(GL_STENCIL_TEST);
   glEnable(GL_BLEND);
-  glEnable(GL_CULL_FACE);
+  // glEnable(GL_CULL_FACE);
   glCullFace(GL_BACK);
   // glFrontFace(GL_CCW);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -454,6 +454,38 @@ int main() {
   // glDeleteShader(vertexShader);
   // glDeleteShader(fragmentShader);
   Model loaded_model{"./resources/models/nanosuit/nanosuit.obj"};
+
+  GLuint fbo;
+  glGenFramebuffers(1, &fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+  unsigned int texture_1;
+  glGenTextures(1, &texture_1);
+  glBindTexture(GL_TEXTURE_2D, texture_1);
+
+  // 纹理缓冲
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,width, height, 0, GL_RGB, GL_UNSIGNED_BYTE,
+               NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  // 附加颜色附件  此外还可以附加深度和模板缓冲纹理
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         texture_1, 0);
+
+  // 渲染缓冲对象
+  unsigned int rbo;
+  glGenRenderbuffers(1, &rbo);
+  glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
+  glBindRenderbuffer(GL_RENDERBUFFER, 0);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                            GL_RENDERBUFFER, rbo);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    std::cerr << "error::framebuffer:: framebuffer is not complete!"
+              << std::endl;
+  }
+  // glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
   GLuint VAO, VBO, EBO;
   GLuint lightVAO, lightVBO;
@@ -641,41 +673,23 @@ int main() {
       glm::vec3(-4.0f, 2.0f, -12.0f), glm::vec3(0.0f, 0.0f, -3.0f)};
 
   while (!glfwWindowShouldClose(window)) {
-
     currentFrame = glfwGetTime();
     deltaTime = currentFrame - lastFrame;
     lastFrame = currentFrame;
-    // process
-    // float timeValue = glfwGetTime();
-    // float greenValue = (std::sin(timeValue) / 2.0f) + 0.5f;
-    // int vertexColorLocation = glGetUniformLocation(shaderProgram,
-    // "outColor"); 设置背景颜色
     processInput(window);
-    glClearColor(.0f, .0f, .0f, .0f);
+    glClearColor(.0f, .0f, .0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
-    float camX = std::sin(glfwGetTime()) * radius;
-    float camZ = std::cos(glfwGetTime()) * radius;
-
+    float randomAngle = std::sin(glfwGetTime()) * 180.0f;
     auto view = camera.lookAt();
-    // view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-    // model =
-    // glm::rotate(model, (float)glfwGetTime(), glm::vec3(0.5f, 1.0f, 0.0f));
     auto projection{glm::perspective(
         glm::radians(fov), (float)width / (float)height, 0.1f, 100.0f)};
 
     auto model{glm::mat4(1.0f)};
     auto trans = projection * view * model;
-
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     lightShaderProgram.use();
     glBindVertexArray(lightVAO);
-    // model = glm::rotate(glm::translate(model, glm::vec3(.2f, .3f, 1.3f)),
-    // glm::radians(angle), glm::vec3(1.0f, 0.3f, 0.5f));
-    float randomAngle = std::sin(glfwGetTime()) * 180.0f;
-    // model = glm::translate(
-    //     glm::rotate(model, glm::radians(randomAngle), glm::vec3(.0f, 1.f,
-    //     .0f)), glm::vec3(1.2f, 1.0f, 2.0f));
-
+    randomAngle = std::sin(glfwGetTime()) * 180.0f;
     glStencilMask(0x00);
     for (std::size_t i{}; i < std::size(pointLightPositions); i++) {
       model = glm::translate(model, pointLightPositions[i]);
@@ -683,6 +697,9 @@ int main() {
       lightShaderProgram.setMat4("trans", trans);
       glDrawArrays(GL_TRIANGLES, 0, 36);
     }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClearColor(1.f, .0f, .0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     // 画图
     shaderProgram.use();
     glBindVertexArray(VAO);
@@ -711,13 +728,6 @@ int main() {
                             glm::vec3(1.0f, 1.0f, 1.0f));
     }
     model = glm::mat4(1.0f);
-    // glm::vec3 lightColor;
-    // lightColor.x = std::sin(glfwGetTime() * 2.0f);
-    // lightColor.y = std::sin(glfwGetTime() * 0.7f);
-    // lightColor.z = std::sin(glfwGetTime() * 1.3f);
-    // glm::vec3 diffuseColor = lightColor * glm::vec3(.5f);
-    // glm::vec3 ambientColor = diffuseColor * glm::vec3(.2f);
-
     shaderProgram.setVec3("spotLight.ambient", glm::vec3(.2f, .2f, .2f));
     shaderProgram.setVec3("spotLight.diffuse", glm::vec3(.8f, .8f, .8f));
     shaderProgram.setVec3("spotLight.specular", glm::vec3(1.0f, 1.0f, 1.0f));
@@ -727,12 +737,6 @@ int main() {
                            glm::cos(glm::radians(15.5f)));
     shaderProgram.setVec3("spotLight.direction", camera.cameraFront);
     shaderProgram.setVec3("spotLight.position", camera.cameraPos);
-
-    // shaderProgram.setVec3("light.LightDir", glm::vec3(-0.2f, -1.0f, -.3f));
-
-    // shaderProgram.setVec3("material.ambient", 1.0f, .5f, .3f);
-    // shaderProgram.setVec3("material.diffuse", 1.0f, .5f, .31f);
-
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
     shaderProgram.setInt("material.diffuse", 0);
@@ -750,38 +754,10 @@ int main() {
     shaderProgram.setMat4("view", view);
     shaderProgram.setMat4("projection", projection);
 
-    // bind textures on corresponding texture units
-    // glActiveTexture(GL_TEXTURE1);
-    // glActiveTexture(GL_TEXTURE2);
-    // glBindTexture(GL_TEXTURE_2D, texture_emission);
-
-    glStencilMask(0x00);
-    // loaded_model.Draw(shaderProgram);
-    // shaderProgram.setFloat("offset", x_offset, .0f, .0f);
-    // shaderProgram.setFloat("offsetColor", r_offset, .2f, .0f);
-    // shaderProgram.setFloat("ourColor", 0.4f, 0.3f, 0.2f);
-    // glUseProgram(shaderProgram);
-    // glUniform4f(vertexColorLocation, 0.0f, greenValue, 0.0f, 1.0f);
-    // glBindVertexArray(VAO);
     glStencilFunc(GL_ALWAYS, 1, 0xff);
     glStencilMask(0xff);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     loaded_model.Draw(shaderProgram);
-    // glBindVertexArray(cubeVAO);
-    // for (std::size_t i{}; i < 3; i++) {
-    //   glm::mat4 model{1.0f};
-    //   model = glm::rotate(glm::translate(model, cubePositions[i]),
-    //                       glm::radians(randomAngle), glm::vec3(1.0f, 0.3f, 0.5f));
-
-    //   shaderProgram.setMat4("model", model);
-    //   // glDrawArrays(GL_TRIANGLES, 0, 3);
-    //   // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    //   glActiveTexture(GL_TEXTURE0);
-    //   glBindTexture(GL_TEXTURE_2D, texture);
-    //   glActiveTexture(GL_TEXTURE1);
-    //   glBindTexture(GL_TEXTURE_2D, texture_sepc);
-    //   glDrawArrays(GL_TRIANGLES, 0, 36);
-    // }
     glBindVertexArray(VAO);
     for (std::size_t i{}; i < sizeof(cubePositions) / sizeof(glm::vec3); i++) {
       glm::mat4 model{1.0f};
@@ -789,9 +765,6 @@ int main() {
                           glm::radians(0.0f), glm::vec3(1.0f, 0.3f, 0.5f));
 
       shaderProgram.setMat4("model", model);
-      // glDrawArrays(GL_TRIANGLES, 0, 3);
-      // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
       glActiveTexture(GL_TEXTURE0);
       glBindTexture(GL_TEXTURE_2D, texture);
       glActiveTexture(GL_TEXTURE1);
@@ -837,7 +810,6 @@ int main() {
     largeShaderProgram.setMat4("projection", projection);
     glStencilFunc(GL_NOTEQUAL, 1, 0xff);
     glStencilMask(0x00);
-    // glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     // 绘制窗口
     windowShaderProgram.use();
@@ -853,7 +825,6 @@ int main() {
       glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
-    glEnable(GL_DEPTH_TEST);
     glStencilFunc(GL_ALWAYS, 0, 0xff);
     glStencilMask(0xff);
 
