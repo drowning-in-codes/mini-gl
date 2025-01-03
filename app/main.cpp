@@ -258,7 +258,37 @@ std::vector<Texture> Model::loadMaterialTextures(aiMaterial *mat,
   }
   return textures;
 }
+unsigned int loadCubemap(std::vector<std::string> faces) {
+  /**
+   * @brief  立方体贴图
+   */
+  unsigned int cubeTexture;
+  glGenTextures(1, &cubeTexture);
+  glBindTexture(GL_TEXTURE_CUBE_MAP, cubeTexture);
+  std::size_t index{};
+  stbi_set_flip_vertically_on_load(GL_FALSE);
+  for (const auto &entry : faces) {
+    int width, height, nrChannels;
+    auto data = stbi_load(entry.c_str(), &width, &height, &nrChannels, 0);
+    if (data) {
+      glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + index, 0, GL_RGB, width,
+                   height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    } else {
+      std::cout << "Cubemap texture failed to load at path: " << entry
+                << std::endl;
+      stbi_image_free(data);
+    }
+    index++;
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+  }
 
+  stbi_set_flip_vertically_on_load(GL_TRUE);
+  return cubeTexture;
+}
 void processInput(GLFWwindow *window) {
   if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
     glfwSetWindowShouldClose(window, true);
@@ -385,15 +415,14 @@ int main() {
     return -1;
   }
   glEnable(GL_DEPTH_TEST); // 启用深度和模板测试
-  glDepthFunc(GL_LESS);
-  glEnable(GL_STENCIL_TEST);
-  glEnable(GL_BLEND);
+  // glDepthFunc(GL_LESS);
+  // glEnable(GL_BLEND);
+
+  // 启动面剔除
   // glEnable(GL_CULL_FACE);
-  glCullFace(GL_BACK);
+  // glCullFace(GL_BACK);
   // glFrontFace(GL_CCW);
-  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glStencilFunc(GL_NOTEQUAL, 1, 0xff);       // 设置模板测试函数
-  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // 设置模板测试操作
+
   // glStencilMask(0xff);                       // 启用模板写入
 
   auto texture = LoadTexture("./resources/textures/container2.png");
@@ -459,25 +488,69 @@ int main() {
   glGenFramebuffers(1, &fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo);
 
-  unsigned int texture_1;
-  glGenTextures(1, &texture_1);
-  glBindTexture(GL_TEXTURE_2D, texture_1);
+  unsigned int textureColorbuffer;
+  glGenTextures(1, &textureColorbuffer);
+  glBindTexture(GL_TEXTURE_2D, textureColorbuffer);
 
   // 纹理缓冲
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,width, height, 0, GL_RGB, GL_UNSIGNED_BYTE,
-               NULL);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB,
+               GL_UNSIGNED_BYTE, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   // 附加颜色附件  此外还可以附加深度和模板缓冲纹理
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         texture_1, 0);
+                         textureColorbuffer, 0);
+
+  /**
+   * @brief 立方体贴图
+   *
+   */
+  std::vector<std::string> faces{"right.jpg",  "left.jpg",  "top.jpg",
+                                 "bottom.jpg", "front.jpg", "back.jpg"};
+  unsigned int cubemapTexture = loadCubemap([&faces]() {
+    std::ranges::for_each(faces, [](std::string &face) {
+      face = (std::string("./resources/skybox/") / fs::path(face)).string();
+      return face;
+    });
+    return faces;
+  }());
+  float skyboxVertices[] = {
+      // positions
+      -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f,
+      1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f,
+
+      -1.0f, -1.0f, 1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  -1.0f,
+      -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f, 1.0f,
+
+      1.0f,  -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f,
+
+      -1.0f, -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f, -1.0f, 1.0f,
+
+      -1.0f, 1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  1.0f,
+      1.0f,  1.0f,  1.0f,  -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f,  -1.0f,
+
+      -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, -1.0f,
+      1.0f,  -1.0f, -1.0f, -1.0f, -1.0f, 1.0f,  1.0f,  -1.0f, 1.0f};
+  auto skybox_vt = "./resources/shaders/skybox.vs";
+  auto skybox_fg = "./resources/shaders/skybox.fs";
+  cg::Shader skyboxShader{skybox_vt, skybox_fg};
+  GLuint skyboxVAO, skyboxVBO;
+  glGenVertexArrays(1, &skyboxVAO);
+  glGenBuffers(1, &skyboxVBO);
+  glBindVertexArray(skyboxVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices,
+               GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
 
   // 渲染缓冲对象
   unsigned int rbo;
   glGenRenderbuffers(1, &rbo);
   glBindRenderbuffer(GL_RENDERBUFFER, rbo);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-  glBindRenderbuffer(GL_RENDERBUFFER, 0);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                             GL_RENDERBUFFER, rbo);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -672,35 +745,96 @@ int main() {
       glm::vec3(0.7f, 0.2f, 2.0f), glm::vec3(2.3f, -3.3f, -4.0f),
       glm::vec3(-4.0f, 2.0f, -12.0f), glm::vec3(0.0f, 0.0f, -3.0f)};
 
+  float quadVertices[] = {// vertex attributes for a quad that fills the entire
+                          // screen in Normalized Device Coordinates.
+                          // positions   // texCoords
+                          -1.0f, 1.0f, 0.0f, 1.0f,  -1.0f, -1.0f,
+                          0.0f,  0.0f, 1.0f, -1.0f, 1.0f,  0.0f,
+
+                          -1.0f, 1.0f, 0.0f, 1.0f,  1.0f,  -1.0f,
+                          1.0f,  0.0f, 1.0f, 1.0f,  1.0f,  1.0f};
+  /**
+   * @brief render framebuffer to quad
+   */
+  GLuint quadVAO, quadVBO;
+  glGenVertexArrays(1, &quadVAO);
+  glGenBuffers(1, &quadVBO);
+  glBindVertexArray(quadVAO);
+  glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices,
+               GL_STATIC_DRAW);
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                        (void *)(2 * sizeof(float)));
+  glBindVertexArray(0);
+  auto quadVertexShaderFile = "./resources/shaders/quad.vs";
+  auto quadFragmentShaderFile = "./resources/shaders/quad.fs";
+  cg::Shader quadShader{quadVertexShaderFile, quadFragmentShaderFile};
+  quadShader.setInt("texture1", 0);
+
+  skyboxShader.setInt("cubeTexture", 0);
+  glEnable(GL_STENCIL_TEST);
+  glEnable(GL_BLEND);
+  glEnable(GL_DEPTH_TEST);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glStencilFunc(GL_ALWAYS, 1, 0xff);         // 设置模板测试函数
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE); // 设置模板测试操作
   while (!glfwWindowShouldClose(window)) {
     currentFrame = glfwGetTime();
     deltaTime = currentFrame - lastFrame;
     lastFrame = currentFrame;
     processInput(window);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glStencilFunc(GL_ALWAYS, 1, 0xff); // 设置模板测试函数
+    glEnable(GL_STENCIL_TEST);
+    glEnable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+
+    glStencilMask(0xff);
+
     glClearColor(.0f, .0f, .0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     float randomAngle = std::sin(glfwGetTime()) * 180.0f;
+    randomAngle = std::sin(glfwGetTime()) * 180.0f;
     auto view = camera.lookAt();
     auto projection{glm::perspective(
         glm::radians(fov), (float)width / (float)height, 0.1f, 100.0f)};
 
     auto model{glm::mat4(1.0f)};
     auto trans = projection * view * model;
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    glStencilMask(0x00);
+    /**
+     * @brief 绘制天空盒
+     *
+     */
+    skyboxShader.use();
+    skyboxShader.setMat4("view", glm::mat4(glm::mat3(view)));
+    skyboxShader.setMat4("projection", projection);
+    glBindVertexArray(skyboxVAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+    glDepthMask(GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glDepthMask(GL_TRUE);
+
+    /**
+     * @brief 绘制光源
+     */
     lightShaderProgram.use();
     glBindVertexArray(lightVAO);
-    randomAngle = std::sin(glfwGetTime()) * 180.0f;
-    glStencilMask(0x00);
     for (std::size_t i{}; i < std::size(pointLightPositions); i++) {
       model = glm::translate(model, pointLightPositions[i]);
       trans = projection * view * model;
       lightShaderProgram.setMat4("trans", trans);
       glDrawArrays(GL_TRIANGLES, 0, 36);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(1.f, .0f, .0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    // 画图
+    /**
+     * @brief 绘制立方体以及光源
+     */
     shaderProgram.use();
     glBindVertexArray(VAO);
     auto lightCenterPos =
@@ -747,17 +881,21 @@ int main() {
     auto coord_trans = glm::vec2(.0f, 1.0f + std::sin(glfwGetTime()) / 2.0f);
     shaderProgram.setVec2("coord_trans", coord_trans);
 
-    // shaderProgram.setVec3("lightColor", 1.0f, 1.0f, 1.0f);
-    // shaderProgram.setVec3("objectColor", 1.0f, .5f, .32f);
     shaderProgram.setVec3("viewPos", camera.cameraPos);
     shaderProgram.setMat4("model", model);
     shaderProgram.setMat4("view", view);
     shaderProgram.setMat4("projection", projection);
 
-    glStencilFunc(GL_ALWAYS, 1, 0xff);
-    glStencilMask(0xff);
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
+    glStencilMask(0xFF);
     glDrawArrays(GL_TRIANGLES, 0, 36);
+
+    glStencilMask(0x00);
+    /**
+     * @brief 加载并绘制模型
+     */
     loaded_model.Draw(shaderProgram);
+
     glBindVertexArray(VAO);
     for (std::size_t i{}; i < sizeof(cubePositions) / sizeof(glm::vec3); i++) {
       glm::mat4 model{1.0f};
@@ -800,7 +938,10 @@ int main() {
       grassShaderProgram.setMat4("model", model);
       glDrawArrays(GL_TRIANGLES, 0, 6);
     }
-
+    /**
+     * @brief 绘制边框
+     *
+     */
     model = glm::mat4(1.0f);
     largeShaderProgram.use();
     glBindVertexArray(VAO);
@@ -811,7 +952,12 @@ int main() {
     glStencilFunc(GL_NOTEQUAL, 1, 0xff);
     glStencilMask(0x00);
     glDrawArrays(GL_TRIANGLES, 0, 36);
-    // 绘制窗口
+
+    glStencilFunc(GL_ALWAYS, 1, 0xff);
+
+    /**
+     * @brief 绘制窗户
+     */
     windowShaderProgram.use();
     glBindVertexArray(VAO);
     windowShaderProgram.setMat4("view", view);
@@ -825,8 +971,20 @@ int main() {
       glDrawArrays(GL_TRIANGLES, 0, 6);
     }
 
-    glStencilFunc(GL_ALWAYS, 0, 0xff);
-    glStencilMask(0xff);
+    /**
+     * @brief 绑定到默认的framebuffer
+     */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glClearColor(.0f, .0f, .0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    quadShader.use();
+    glBindVertexArray(quadVAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, textureColorbuffer);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glStencilFunc(GL_ALWAYS, 1, 0xff);
 
     glfwPollEvents();
     glfwSwapBuffers(window);

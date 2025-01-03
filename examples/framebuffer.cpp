@@ -78,7 +78,8 @@ int main() {
 
   // build and compile shaders
   // -------------------------
-  Shader shader("resources/shaders/framebuffers.vs", "resources/shaders/framebuffers.fs");
+  Shader shader("resources/shaders/framebuffers.vs",
+                "resources/shaders/framebuffers.fs");
   Shader screenShader("resources/shaders/framebuffers_screen.vs",
                       "resources/shaders/framebuffers_screen.fs");
 
@@ -166,10 +167,10 @@ int main() {
 
   // load textures
   // -------------
-  unsigned int cubeTexture =
-      loadTexture(filesystem::path("resources/textures/container.jpg").string().c_str());
-  unsigned int floorTexture =
-      loadTexture(filesystem::path("resources/textures/metal.png").string().c_str());
+  unsigned int cubeTexture = loadTexture(
+      filesystem::path("resources/textures/container.jpg").string().c_str());
+  unsigned int floorTexture = loadTexture(
+      filesystem::path("resources/textures/metal.png").string().c_str());
 
   // shader configuration
   // --------------------
